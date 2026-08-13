@@ -248,20 +248,40 @@ with tempfile.TemporaryDirectory() as d:
 # 4. PollWatcher actually detects a file modification
 # (force_polling=True is the only code path that fires on z/OS)
 def _detect_change():
+    # Same race as the env-var case below: one write, timed against a watcher
+    # that may not have taken its first snapshot yet. A poll watcher compares
+    # snapshots, so a change that lands before the first one is simply the
+    # starting state and is never reported. Write repeatedly and poll watch()
+    # until something is seen, rather than relying on one write landing inside
+    # the window.
     with tempfile.TemporaryDirectory() as d:
         f = pathlib.Path(d) / "watch.txt"
         f.write_text("initial")
-        # poll_delay_ms=300 so the watcher has time to snapshot before change
         w = RustNotify([d], False, True, 300, True, False)
+        stop = threading.Event()
+        keep_writing = threading.Event()
+        keep_writing.set()
+
         def modify():
-            time.sleep(0.5)
-            f.write_text("changed!")
+            n = 0
+            while keep_writing.is_set():
+                time.sleep(0.4)
+                n += 1
+                f.write_text("changed %d" % n)
+
         t = threading.Thread(target=modify, daemon=True)
         t.start()
-        stop = threading.Event()
-        result = w.watch(100, 100, 5000, stop)
-        w.close()
-        t.join()
+        try:
+            deadline = time.time() + 20
+            result = None
+            while time.time() < deadline:
+                result = w.watch(100, 100, 3000, stop)
+                if isinstance(result, set) and result:
+                    break
+        finally:
+            keep_writing.clear()
+            t.join(timeout=5)
+            w.close()
         return isinstance(result, set) and len(result) > 0
 
 check("PollWatcher detects file change", _detect_change)
