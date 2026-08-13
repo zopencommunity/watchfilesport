@@ -25,6 +25,12 @@ WATCHFILES_VERSION="1.2.0"
 ###
 
 export ZOPEN_PROJECT_NAME="watchfiles"
+# BARE has no source directory to take a name from, so zopen-build falls back to
+# the directory holding this buildenv -- "watchfilesport" -- and never appends the
+# version, because only GIT and LOCAL do that. The pax and the installed
+# version directory then come out as "watchfilesport" instead of "watchfiles-<version>".
+# fdport, the reference BARE port, sets this for the same reason.
+export ZOPEN_NAME="watchfiles-${WATCHFILES_VERSION}"
 export ZOPEN_BUILD_LINE="STABLE"
 export ZOPEN_TYPE="BARE"
 # ZOPEN_TYPE on its own is not enough, and the difference is invisible until it
