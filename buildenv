@@ -1,0 +1,166 @@
+# bump: watchfiles-version /WATCHFILES_VERSION="(.*)"/ https://github.com/samuelcolvin/watchfiles.git|semver:*
+WATCHFILES_VERSION="1.2.0"
+
+###
+### Build control file for watchfilesport
+###
+### watchfiles is a Python file-watching library with a Rust core (notify crate).
+### It cannot be compiled natively on z/OS (no native Rust toolchain).
+### Prebuilt wheels are cross-compiled on Linux-on-Power (LoP) using IBM's
+### Rust cross-compiler targeting s390x-ibm-zos.
+###
+### On z/OS, watchfiles uses the PollWatcher backend (notify's fallback for
+### unsupported platforms) which polls file metadata using stat(). This provides
+### correct behaviour on HFS/zFS filesystems.
+###
+### Cross-compilation infrastructure:
+###   https://github.ibm.com/compiler/rust-scripts  branch itodorov/zos-cross-compile-setup
+###
+
+export ZOPEN_PROJECT_NAME="watchfiles"
+export ZOPEN_BUILD_LINE="STABLE"
+export ZOPEN_TYPE="BARE"
+export ZOPEN_STABLE_DEPS="check_python curl"
+export ZOPEN_DEV_DEPS="check_python curl"
+export ZOPEN_CATEGORIES="development library"
+export ZOPEN_RUNTIME_DEPS="check_python"
+
+export ZOPEN_CONFIGURE="skip"
+export ZOPEN_MAKE="skip"
+export ZOPEN_CHECK="zopen_custom_check"
+export ZOPEN_INSTALL="zopen_custom_install"
+
+zopen_get_version() {
+  echo "${WATCHFILES_VERSION}"
+}
+
+zopen_init() {
+  # Determine the cpXY tag and platform for the active Python interpreter
+  _pyver=$( (check_python --version 2>&1 || python3 --version 2>&1) | \
+            grep -oE '[0-9]+\.[0-9]+' | head -1)
+  _py=$(echo "$_pyver" | tr -d '.')
+
+  # Python 3.14+ uses 'zos' platform tag; earlier versions use 'os390_29_00_8561'
+  _major=$(echo "$_pyver" | cut -d. -f1)
+  _minor=$(echo "$_pyver" | cut -d. -f2)
+  if [ "$_major" -gt 3 ] || { [ "$_major" -eq 3 ] && [ "$_minor" -ge 14 ]; }; then
+    _plat="zos"
+  else
+    _plat="os390_29_00_8561"
+  fi
+
+  _wheel="watchfiles-${WATCHFILES_VERSION}-cp${_py}-cp${_py}-${_plat}.whl"
+  _url="https://github.com/zopencommunity/watchfilesport/releases/download/v${WATCHFILES_VERSION}/${_wheel}"
+
+  printInfo "Downloading ${_wheel}"
+  curl -fsSL -o "${_wheel}" "${_url}" || {
+    printError "Failed to download ${_wheel}"
+    printError "Build the wheel on LoP with build_zos_wheel.py and upload as a release asset."
+    return 1
+  }
+  chtag -t -c ISO8859-1 "${_wheel}" 2>/dev/null || true
+}
+
+zopen_custom_check() {
+  _wheel=$(ls watchfiles-*.whl 2>/dev/null | head -1)
+  [ -n "${_wheel}" ] || { printError "No wheel found"; return 1; }
+
+  python3 -m venv .check_venv
+  . .check_venv/bin/activate
+
+  pip install --quiet --no-deps "${_wheel}"
+  pip install --quiet anyio sniffio 2>/dev/null || true
+
+  python3 - <<'PYEOF'
+import sys, tempfile, pathlib, threading, time
+
+failures = 0
+def check(label, expr):
+    global failures
+    if expr:
+        print("PASS:", label)
+    else:
+        print("FAIL:", label, file=sys.stderr)
+        failures += 1
+
+# 1. Import the Rust extension directly
+try:
+    from watchfiles._rust_notify import RustNotify, WatchfilesRustInternalError
+    check("import _rust_notify", True)
+except Exception as exc:
+    check("import _rust_notify", False)
+    sys.exit(1)
+
+# 2. Import high-level API
+try:
+    from watchfiles import watch, Change
+    check("import watchfiles", True)
+except Exception as exc:
+    check("import watchfiles", False)
+
+# 3. Instantiate and close the watcher (PollWatcher on z/OS)
+with tempfile.TemporaryDirectory() as d:
+    f = pathlib.Path(d) / "test.txt"
+    f.write_text("initial")
+    try:
+        w = RustNotify([d], False, True, 100, True, False)
+        w.close()
+        check("RustNotify create/close", True)
+    except Exception as exc:
+        check("RustNotify create/close", False)
+
+    # 4. Detect a file modification via PollWatcher
+    try:
+        w2 = RustNotify([d], False, True, 300, True, False)
+        def modify():
+            time.sleep(0.5)
+            f.write_text("changed!")
+        t = threading.Thread(target=modify, daemon=True)
+        t.start()
+        stop = threading.Event()
+        result = w2.watch(100, 100, 5000, stop)
+        w2.close()
+        t.join()
+        check("PollWatcher detects change", isinstance(result, set) and len(result) > 0)
+    except Exception as exc:
+        check("PollWatcher detects change", False)
+        print("  exception:", exc, file=sys.stderr)
+
+print()
+print("watchfiles %s on Python %s  --  %d passed, %d failed" % (
+    __import__('watchfiles').__version__, sys.version.split()[0],
+    4 - failures, failures))
+sys.exit(failures)
+PYEOF
+  _rc=$?
+  deactivate
+  rm -rf .check_venv
+  return ${_rc}
+}
+
+zopen_custom_install() {
+  _wheel=$(ls watchfiles-*.whl 2>/dev/null | head -1)
+  [ -n "${_wheel}" ] || { printError "No wheel found to install"; return 1; }
+
+  mkdir -p "${ZOPEN_INSTALL_DIR}/lib/python"
+  python3 -m pip install --quiet --no-deps --target="${ZOPEN_INSTALL_DIR}/lib/python" "${_wheel}"
+
+  mkdir -p "${ZOPEN_INSTALL_DIR}/dist"
+  cp "${_wheel}" "${ZOPEN_INSTALL_DIR}/dist/"
+
+  printInfo "Installed watchfiles ${WATCHFILES_VERSION} from ${_wheel}"
+}
+
+zopen_append_to_validate_install() {
+  echo "python3 -c \"import watchfiles; print('watchfiles', watchfiles.__version__)\""
+}
+
+zopen_check_results() {
+  dir="$1"; pfx="$2"; chk="${dir}/${pfx}_check.log"
+  passed=$(grep -c "^PASS:" "${chk}" 2>/dev/null || echo 0)
+  failed=$(grep -c "^FAIL:" "${chk}" 2>/dev/null || echo 0)
+  total=$((passed + failed))
+  echo "actualFailures:${failed}"
+  echo "totalTests:${total}"
+  echo "expectedFailures:0"
+}
