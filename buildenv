@@ -271,20 +271,32 @@ check("PollWatcher detects file change", _detect_change)
 import os
 os.environ["WATCHFILES_FORCE_POLLING"] = "true"
 def _env_force_polling():
+    # A poll watcher only reports a change it can see between two snapshots, so
+    # a single write 0.5s after the thread starts is a race: if the first
+    # snapshot has not been taken yet the change is already in the baseline and
+    # nothing further happens until the timeout. That failed on 3.12 and 3.13
+    # while passing on 3.14, which is the signature of a race rather than a
+    # platform difference. Keep writing until it is observed.
     with tempfile.TemporaryDirectory() as d:
         f = pathlib.Path(d) / "e.txt"
         f.write_text("x")
         stop = threading.Event()
         changes_seen = []
+
         def do_watch():
             for batch in watch(d, poll_delay_ms=200, stop_event=stop):
-                changes_seen.extend(batch)
-                break
+                if batch:
+                    changes_seen.extend(batch)
+                    break
+
         wt = threading.Thread(target=do_watch, daemon=True)
         wt.start()
-        time.sleep(0.5)
-        f.write_text("y")
-        wt.join(timeout=6)
+        deadline = time.time() + 20
+        while not changes_seen and time.time() < deadline:
+            time.sleep(0.4)
+            f.write_text("y%d" % time.time())
+        stop.set()
+        wt.join(timeout=5)
         return len(changes_seen) > 0
 check("watch() works via WATCHFILES_FORCE_POLLING", _env_force_polling)
 
