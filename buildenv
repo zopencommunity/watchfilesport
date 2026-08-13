@@ -114,6 +114,18 @@ zopen_init() {
 
 # Create (or reuse) a per-interpreter venv with system packages so the
 # interpreter's bundled packages are visible during the test phase.
+#
+# anyio is not optional: watchfiles/main.py and run.py import it at module
+# level, so without it the very first check fails with
+#
+#   FAIL: import _rust_notify - No module named 'anyio'
+#
+# and no interpreter bundles it. pip does not supply it either, because the
+# cross-compiled wheels carry no Requires-Dist at all -- upstream declares
+# anyio>=3.0.0 and the wheel METADATA has no dependency lines. Naming it here
+# is a workaround for that, not the fix; the wheels need rebuilding with
+# upstream's metadata preserved, after which this stays correct but stops being
+# load bearing.
 _wf_venv_for() {
   _wf_vd=$(_zopen_python_venv_dir "$1")
   if [ ! -f "${_wf_vd}/bin/activate" ]; then
@@ -121,7 +133,7 @@ _wf_venv_for() {
     "$(_zopen_python_interpreter_path "$1")" -m venv --system-site-packages "${_wf_vd}" || return 1
   fi
   . "${_wf_vd}/bin/activate" || return 1
-  pip install --disable-pip-version-check --quiet setuptools build installer wheel
+  pip install --disable-pip-version-check --quiet setuptools build installer wheel anyio
 }
 
 zopen_custom_build() {
@@ -298,6 +310,20 @@ zopen_post_install() {
   for _so in "${ZOPEN_INSTALL_DIR}"/lib/python/watchfiles/*.so; do
     [ -f "${_so}" ] && chmod +x "${_so}"
   done
+
+  # Same reason anyio is in the check venv: watchfiles imports it at module
+  # level, no interpreter bundles it, and zopen-build installs the wheel with
+  # --no-deps -- correct in general, since zopen wants dependencies declared as
+  # ports, but there is no anyio port. Without this the pax installs a module
+  # that cannot be imported and zopen_append_to_validate_install fails.
+  #
+  # anyio pulls idna and sniffio, all three pure Python, so they work on every
+  # interpreter from the same directory and need no per-version handling.
+  if [ ! -d "${ZOPEN_INSTALL_DIR}/lib/python/anyio" ]; then
+    printInfo "Adding anyio to the package tree"
+    python3 -m pip install --disable-pip-version-check --quiet \
+      --target="${ZOPEN_INSTALL_DIR}/lib/python" anyio || return 1
+  fi
   return 0
 }
 
