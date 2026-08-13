@@ -196,6 +196,18 @@ zopen_python_test() {
   python - <<'PYEOF'
 import sys, tempfile, pathlib, threading, time
 
+# This test exists to exercise the *installed* wheel, so the working directory
+# has no business being importable. python reads this script from stdin and so
+# puts "" first on sys.path; if anything ever leaves a watchfiles/ directory
+# beside the build, "import watchfiles" silently picks up that source tree,
+# which has no compiled extension, and the run fails with
+# "No module named 'watchfiles._rust_notify'" as though the wheel were broken.
+#
+# ZOPEN_STABLE_TYPE=BARE stops the clone that caused this, so this is belt and
+# braces -- but it is the cheap half, and the failure it prevents is expensive
+# to read.
+sys.path = [p for p in sys.path if p not in ("", ".")]
+
 failures = 0
 total = 0
 
