@@ -27,6 +27,24 @@ WATCHFILES_VERSION="1.2.0"
 export ZOPEN_PROJECT_NAME="watchfiles"
 export ZOPEN_BUILD_LINE="STABLE"
 export ZOPEN_TYPE="BARE"
+# ZOPEN_TYPE on its own is not enough, and the difference is invisible until it
+# breaks. For a named build line, zopen-build overwrites ZOPEN_TYPE: with no
+# ZOPEN_STABLE_TYPE it derives the type from ZOPEN_STABLE_URL, and a URL ending
+# in .git makes it GIT. So the setting above was discarded, upstream really was
+# cloned, and the check ran inside that clone.
+#
+# For most ports that is only wasted work. Here it broke the build: the
+# watchfiles repo keeps its Python package at the repo root, zopen_python_test
+# feeds the script to python on stdin, and python puts the working directory
+# first on sys.path -- so "import watchfiles" found the source tree instead of
+# the installed wheel and failed with
+#
+#   No module named 'watchfiles._rust_notify'
+#
+# which reads like a broken wheel rather than a shadowed import. Setting the
+# per-line type is what actually keeps this BARE.
+export ZOPEN_STABLE_TYPE="BARE"
+export ZOPEN_DEV_TYPE="BARE"
 # ZOPEN_STABLE_URL is required even for BARE ports: checkEnv only exempts
 # ZOPEN_TYPE=LOCAL, and getCode returns early for BARE without fetching.
 # This records which upstream source the prebuilt wheels were built from.
@@ -212,16 +230,20 @@ except ImportError as exc:
 check("import watchfiles", lambda: True)
 
 # 3. Instantiate and close RustNotify (PollWatcher on z/OS)
+# Defined before use: check() calls the lambda immediately, so a definition
+# further down the file has not run yet and the call fails with
+# "name '_make_and_close' is not defined".
+def _make_and_close(d):
+    w = RustNotify([d], False, True, 100, True, False)
+    w.close()
+    return True
+
+
 with tempfile.TemporaryDirectory() as d:
     f = pathlib.Path(d) / "test.txt"
     f.write_text("initial")
     check("RustNotify create/close",
           lambda: _make_and_close(d))
-
-def _make_and_close(d):
-    w = RustNotify([d], False, True, 100, True, False)
-    w.close()
-    return True
 
 # 4. PollWatcher actually detects a file modification
 # (force_polling=True is the only code path that fires on z/OS)
