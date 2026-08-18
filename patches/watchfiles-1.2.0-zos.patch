@@ -1,0 +1,42 @@
+diff --git a/.cargo/config.toml b/.cargo/config.toml
+index 7caf56d..3c76647 100644
+--- a/.cargo/config.toml
++++ b/.cargo/config.toml
+@@ -1,12 +1,9 @@
+-# see https://pyo3.rs/main/building_and_distribution.html#macos
+-[target.x86_64-apple-darwin]
++[build]
++rustc-wrapper = "rustc-wrapper-wf.sh"
++
++[target.s390x-ibm-zos]
++linker = "s390x-ibm-zos-cc"
+ rustflags = [
+-  "-C", "link-arg=-undefined",
+-  "-C", "link-arg=dynamic_lookup",
+-]
+-
+-[target.aarch64-apple-darwin]
+-rustflags = [
+-  "-C", "link-arg=-undefined",
+-  "-C", "link-arg=dynamic_lookup",
++  "-C", "link-arg=/usr/lpp/IBM/cyp/v3r12/pyz/lib/libpython3.12.x",
++  "-C", "target-feature=-vector",
+ ]
+diff --git a/Cargo.toml b/Cargo.toml
+index 7ef1c77..08a5d67 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -34,3 +34,13 @@ pyo3 = { version = "0.29.0", features = [
+ [lib]
+ name = "_rust_notify"
+ crate-type = ["cdylib"]
++
++[patch.crates-io]
++# pyo3 0.29 z/OS fork
++pyo3 = { path = "/tmp/pyo3" }
++pyo3-build-config = { path = "/tmp/pyo3/pyo3-build-config" }
++pyo3-ffi = { path = "/tmp/pyo3/pyo3-ffi" }
++pyo3-macros = { path = "/tmp/pyo3/pyo3-macros" }
++pyo3-macros-backend = { path = "/tmp/pyo3/pyo3-macros-backend" }
++target-lexicon = { git = "https://github.com/bytecodealliance/target-lexicon", branch = "main" }
++libc = { path = "/tmp/libc-zos" }
