@@ -1,5 +1,5 @@
 # bump: watchfiles-version /WATCHFILES_VERSION="(.*)"/ https://github.com/samuelcolvin/watchfiles.git|semver:*
-WATCHFILES_VERSION="1.2.0"
+WATCHFILES_VERSION="1.3.0"
 
 ###
 ### Build control file for watchfilesport
